@@ -1,84 +1,108 @@
 # Java 21 Maven Project Creator
 
-This directory contains utility scripts to automatically generate, configure, and verify Java 21 Maven projects tailored exactly to the development constraints of your future employer.
+This directory contains one Python utility that generates, configures, and verifies a vanilla Java 21 Maven project.
 
----
+## What it does
 
-## 🛠️ What the Scripts Do
+The script:
 
-There are two versions of the generation script available:
-* **PowerShell**: [create_java21_project.ps1](file:///D:/java/kenny/tw_scripts/create_java21_project/create_java21_project.ps1)
-* **Python**: [create_java21_project.py](file:///D:/java/kenny/tw_scripts/create_java21_project/create_java21_project.py)
+1. Generates a Maven quickstart project in an isolated system temporary directory.
+2. Updates the POM with structured XML editing rather than regular expressions.
+3. Configures Java 21, JUnit 4.13.2, Log4j 2.24.3, and Apache POI 5.4.1.
+4. Adds resource directories, a console Log4j configuration, project-local VS Code settings, and a Java/Maven `.gitignore`.
+5. Moves the completed project to the workspace root.
+6. Optionally initializes Git and attempts an initial commit.
+7. Runs `mvn clean test` and returns a nonzero exit code if generation or verification fails.
 
-When you run either script to create a new project:
-1. **Generates in Temp Folder**: Runs Maven archetype generation inside your system's temporary directory. This prevents VS Code from scanning or parsing half-completed project configurations.
-2. **Injects Custom Configurations**: Modifies the `pom.xml` to force Java 21, upgrade JUnit, and add the logging and Excel reader dependencies.
-3. **Creates Resources & Logging Config**: Creates standard Java resources folders (`src/main/resources` and `src/test/resources`) and writes a default `log4j2.xml` console logging template.
-4. **Writes IDE Settings**: Sets up a local `.vscode/settings.json` configuring VS Code to automatically update project builds on any configuration change.
-5. **Initializes Git & Commits (Optional)**: Optionally runs `git init`, creates a standard `.gitignore` file (configured for Maven, logs, and IDEs), and attempts to make the "Initial commit" automatically.
-6. **Atomic Move**: Moves the fully constructed project folder directly to your workspace root.
-7. **Verifies the Build**: Runs `mvn clean test` on the final project to verify that all dependencies download and compile successfully.
+## Why these tools and dependencies are included
 
----
+This project is meant to help you practise in an environment that resembles the employer's vanilla Java and Maven setup. Each part has a different job.
 
-## 📦 What the Setup Configures For You
+### Maven and `pom.xml`
 
-The generated project sets up a robust, industry-standard vanilla Java development sandbox:
+**Maven** is the build tool. It compiles Java, downloads libraries, runs tests, and packages the project. The `pom.xml` file is Maven's project description: it records the Java version, project name, dependencies, and build configuration.
 
-### 1. **Java 21 Configuration**
-Sets up your compiler source and target properties to **Java 21**, ensuring your code complies with modern LTS standards.
+When this README says **dependency**, it means external code that the project uses. Maven downloads public dependencies from Maven Central and places them on the project's classpath, so you do not copy library files into the repository manually.
 
-### 2. **JUnit 4.13.2 (Testing)**
-* **What it is**: A tool for writing automatic unit tests.
-* **Why it's used**: Instead of manually starting and clicking buttons in a running game server to verify changes, you write short code tests that check if functions produce the expected output. In slot development, this is crucial for running simulation loops to prove your mathematical return-to-player (RTP) models.
+### Java 21
 
-### 3. **Log4j 2.24.3 (Fast Logging)**
-* **What it is**: A high-throughput logging framework for recording console and file messages.
-* **Why it's used**: In professional servers, standard prints (`System.out.println()`) are too slow and degrade performance. Log4j records server actions (e.g. `[INFO] Player bet $1`) and writes them to files or console streams efficiently. A default console appender config is generated in `src/main/resources/log4j2.xml`.
+The compiler source and target are set to Java 21. This makes the practice project compile using the same Java language level you expect to encounter at the employer. Java 21 is an LTS (long-term support) release.
 
-### 4. **Apache POI 5.4.1 (Excel Reader/Writer)**
-* **What it is**: A Java library that reads and writes Microsoft Office spreadsheets.
-* **Why it's used**: Slot game reels, paytables, weights, and mathematical models are designed by game mathematicians in Excel files. Java code reads these spreadsheets at server startup using Apache POI to dynamically load the game data.
+### JUnit 4.13.2 — automated testing
 
----
+**What it is:** JUnit is a framework for writing tests that check Java code automatically. JUnit is given `test` scope, which means it is available while tests are compiled and run, but it is not included as a runtime dependency of the main application.
 
-## 💼 Employer & Technical Stack Constraints
+**Why it is useful here:** Game mathematics and slot simulations need repeatable checks. A test can verify a payout calculation, reel result, or edge case every time the code changes instead of relying on manual testing.
 
-The project structure is 100% aligned with the guidelines of the target company and their `vindictanoctis-server` repository:
+### Log4j 2.24.3 — application logging
 
-* **Vanilla Java**: No heavy microframeworks like **Spring Boot**, **Quarkus**, or **Micronaut** are used.
-* **Maven Build Tool**: Standard POM file format.
-* **Proprietary Dependencies Pre-configured**:
-  The script automatically places placeholders in your project `pom.xml` (commented out for offline safety) for their private internal tools:
-  * `com.ejs.games:game-api:1.2-SNAPSHOT` (Scope: `provided` - compiled against, but supplied by the running game server container).
-  * `com.nolimitcity:game-simulator:1.8` (Scope: `test` - used exclusively for simulations and tests).
-  
-  *Once you are onboarded and connected to the company network, simply uncomment these in your `pom.xml` to fetch them.*
+**What it is:** Log4j records messages from the application. It supports severity levels such as `DEBUG`, `INFO`, `WARN`, and `ERROR`, and can send messages to the console or log files.
 
----
+**Why it is useful here:** Logging makes it easier to observe server and simulation behaviour without scattering `System.out.println()` calls throughout the code. The script creates `src/main/resources/log4j2.xml` with a console logger so Log4j works immediately. `log4j-api` is the interface used by Java code; `log4j-core` is the implementation that processes and outputs the messages.
 
-## 🚀 How to Run the Scripts
+### Apache POI 5.4.1 — Excel files
 
-From the root directory (`D:\java\kenny`), run either command to generate a new sandbox project:
+**What it is:** Apache POI is a Java library for reading and writing Microsoft Office formats. `poi` provides the core spreadsheet APIs, while `poi-ooxml` adds support for modern `.xlsx` workbooks.
 
-### Using PowerShell:
-* **Interactive**:
-  ```powershell
-  .\tw_scripts\create_java21_project\create_java21_project.ps1 -ArtifactId "your-project-name"
-  ```
-  *(It will prompt you for the Group ID and whether you want Git initialization.)*
-* **Batch Mode (No Prompts)**:
-  ```powershell
-  .\tw_scripts\create_java21_project\create_java21_project.ps1 -ArtifactId "your-project-name" -GroupId "com.yourname" -InitGit "yes"
-  ```
+**Why it is useful here:** In game development, reel strips, symbol weights, paytables, and mathematical configurations are often maintained in spreadsheets. Java can load that data with POI rather than duplicating every value by hand.
 
-### Using Python:
-* **Interactive**:
-  ```bash
-  python tw_scripts/create_java21_project/create_java21_project.py
-  ```
-  *(It will prompt you for the project name, Group ID, and whether you want Git initialization.)*
-* **Batch Mode (No Prompts)**:
-  ```bash
-  python tw_scripts/create_java21_project/create_java21_project.py your-project-name com.yourname y
-  ```
+### Relationship to the employer's private stack
+
+The employer's real projects also use private game-server and simulation dependencies. This project intentionally does not include placeholders for those libraries because they are proprietary and unavailable outside the employer's environment.
+
+Instead, this setup reproduces the surrounding public technology and development workflow: Java, Maven, automated testing, logging, spreadsheet-driven configuration, and simulation-oriented code. It is a practice environment, not a copy of the employer's internal codebase.
+
+## Requirements
+
+- Python 3.10 or newer
+- Java 21
+- Maven available on `PATH`
+- Git on `PATH` when Git initialization is requested
+- Network access to Maven Central when required artifacts are not already cached
+
+## Usage
+
+Run commands from the directory that contains `tw_scripts`.
+
+Interactive:
+
+```powershell
+python .\tw_scripts\create_java21_project\create_java21_project.py
+```
+
+Batch mode:
+
+```powershell
+python .\tw_scripts\create_java21_project\create_java21_project.py your-project-name com.yourname y
+```
+
+The third positional argument accepts `y`, `yes`, `true`, `n`, `no`, or `false`.
+
+### Replacing an existing project
+
+The script refuses to overwrite an existing destination. Replacement must be explicitly requested:
+
+```powershell
+python .\tw_scripts\create_java21_project\create_java21_project.py your-project-name com.yourname y --force
+```
+
+**Warning:** `--force` recursively removes the existing project directory after Maven has successfully generated the replacement. Commit or back up valuable work first.
+
+## Generated configuration
+
+- Java compiler source and target: 21
+- JUnit: 4.13.2, test scope
+- Log4j API and Core: 2.24.3
+- Apache POI and POI OOXML: 5.4.1
+- Log4j console configuration: `src/main/resources/log4j2.xml`
+- VS Code setting: `.vscode/settings.json`
+
+The script only writes VS Code settings inside the generated project. It does not change settings in the parent workspace.
+
+## Tests
+
+The tests do not require Maven or network access:
+
+```powershell
+python -m unittest discover -s .\tw_scripts\create_java21_project -p "test_*.py"
+```

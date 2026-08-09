@@ -1,124 +1,42 @@
 #!/usr/bin/env python3
-import sys
-import os
-import subprocess
-import re
-import tempfile
-import shutil
+"""Create and verify a Java 21 Maven project."""
+
+from __future__ import annotations
+
+import argparse
 import json
-
-def get_project_inputs():
-    """Prompt the user or parse arguments for project details."""
-    # Get project name (artifactId)
-    if len(sys.argv) > 1:
-        artifact_id = sys.argv[1]
-    else:
-        artifact_id = input("Enter project name (artifactId): ").strip()
-        if not artifact_id:
-            print("Error: Project name is required.")
-            sys.exit(1)
-            
-    # Get groupId
-    if len(sys.argv) > 2:
-        group_id = sys.argv[2]
-    else:
-        default_group = f"com.{artifact_id.replace('-', '.')}"
-        group_id = input(f"Enter Group ID [{default_group}]: ").strip()
-        if not group_id:
-            group_id = default_group
-
-    # Get Git preference
-    if len(sys.argv) > 3:
-        git_pref = sys.argv[3].lower() in ('true', 'yes', 'y')
-    else:
-        git_input = input("Initialize Git repository? (y/n) [y]: ").strip().lower()
-        git_pref = git_input not in ('n', 'no')
-
-    return artifact_id, group_id, git_pref
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
 
 
-def adjust_pom_to_java21(pom_path):
-    """Modify pom.xml properties to target Java 21 and configure dependencies."""
-    print("\nAutomatically adjusting pom.xml to force Java 21 and configure dependencies...")
-    with open(pom_path, 'r', encoding='utf-8') as f:
-        content = f.read()
+ARCHETYPE_VERSION = "1.4"
+JAVA_VERSION = "21"
+JUNIT_VERSION = "4.13.2"
+LOG4J_VERSION = "2.24.3"
+POI_VERSION = "5.4.1"
+MAVEN_NAMESPACE = "http://maven.apache.org/POM/4.0.0"
 
-    # Update compiler source/target properties
-    updated_content = re.sub(
-        r'<maven\.compiler\.source>.*?</maven\.compiler\.source>',
-        '<maven.compiler.source>21</maven.compiler.source>',
-        content
-    )
-    updated_content = re.sub(
-        r'<maven\.compiler\.target>.*?</maven\.compiler\.target>',
-        '<maven.compiler.target>21</maven.compiler.target>',
-        updated_content
-    )
+ARTIFACT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+GROUP_ID_PATTERN = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$"
+)
 
-    # Define the new dependencies block
-    dependencies_block = """  <dependencies>
-    <!-- Testing -->
-    <dependency>
-      <groupId>junit</groupId>
-      <artifactId>junit</artifactId>
-      <version>4.13.2</version>
-      <scope>test</scope>
-    </dependency>
+DEPENDENCIES = (
+    ("junit", "junit", JUNIT_VERSION, "test"),
+    ("org.apache.logging.log4j", "log4j-api", LOG4J_VERSION, None),
+    ("org.apache.logging.log4j", "log4j-core", LOG4J_VERSION, None),
+    ("org.apache.poi", "poi", POI_VERSION, None),
+    ("org.apache.poi", "poi-ooxml", POI_VERSION, None),
+)
 
-    <!-- Logging (Log4j 2) -->
-    <dependency>
-      <groupId>org.apache.logging.log4j</groupId>
-      <artifactId>log4j-api</artifactId>
-      <version>2.24.3</version>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.logging.log4j</groupId>
-      <artifactId>log4j-core</artifactId>
-      <version>2.24.3</version>
-    </dependency>
-
-    <!-- Microsoft Office Open XML (Excel) -->
-    <dependency>
-      <groupId>org.apache.poi</groupId>
-      <artifactId>poi</artifactId>
-      <version>5.4.1</version>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.poi</groupId>
-      <artifactId>poi-ooxml</artifactId>
-      <version>5.4.1</version>
-    </dependency>
-
-    <!-- Proprietary/Internal Dependencies (Add these when connected to the company network):
-    - com.ejs.games:game-api:1.2-SNAPSHOT (Scope: provided)
-    - com.nolimitcity:game-simulator:1.8 (Scope: test)
-    -->
-  </dependencies>"""
-
-    # Replace the existing dependencies block
-    updated_content = re.sub(
-        r'<dependencies>.*?</dependencies>',
-        dependencies_block,
-        updated_content,
-        flags=re.DOTALL
-    )
-
-    with open(pom_path, 'w', encoding='utf-8') as f:
-        f.write(updated_content)
-    print("Successfully updated pom.xml configurations.")
-
-
-def setup_resource_directories(temp_proj_path):
-    """Create default resource directories and write the log4j2.xml configuration."""
-    print("\nSetting up project resource directories and default Log4j2 config...")
-    try:
-        main_resources = os.path.join(temp_proj_path, "src", "main", "resources")
-        test_resources = os.path.join(temp_proj_path, "src", "test", "resources")
-        os.makedirs(main_resources, exist_ok=True)
-        os.makedirs(test_resources, exist_ok=True)
-
-        log4j_path = os.path.join(main_resources, "log4j2.xml")
-        log4j_content = """<?xml version="1.0" encoding="UTF-8"?>
+LOG4J_CONFIGURATION = """<?xml version="1.0" encoding="UTF-8"?>
 <Configuration status="WARN">
   <Appenders>
     <Console name="Console" target="SYSTEM_OUT">
@@ -132,50 +50,8 @@ def setup_resource_directories(temp_proj_path):
   </Loggers>
 </Configuration>
 """
-        with open(log4j_path, 'w', encoding='utf-8') as f:
-            f.write(log4j_content)
-        print("Created default log4j2.xml in src/main/resources.")
-    except Exception as e:
-        print(f"Warning: Could not configure resources: {e}")
 
-
-
-def configure_vscode_settings(temp_proj_path):
-    """Write VS Code automatic configuration update settings in the project and workspace."""
-    print("\nAdding VS Code settings to automatically update project configuration...")
-    # Write .vscode/settings.json in the temporary project directory
-    project_vscode_dir = os.path.join(temp_proj_path, ".vscode")
-    os.makedirs(project_vscode_dir, exist_ok=True)
-    project_settings_path = os.path.join(project_vscode_dir, "settings.json")
-    settings_data = {
-        "java.configuration.updateBuildConfiguration": "automatic"
-    }
-    with open(project_settings_path, 'w', encoding='utf-8') as f:
-        json.dump(settings_data, f, indent=4)
-    
-    # Write/update .vscode/settings.json in the workspace root (two directories up)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    workspace_root = os.path.abspath(os.path.join(script_dir, "..", ".."))
-    ws_vscode_dir = os.path.join(workspace_root, ".vscode")
-    os.makedirs(ws_vscode_dir, exist_ok=True)
-    ws_settings_path = os.path.join(ws_vscode_dir, "settings.json")
-    ws_settings = {}
-    if os.path.exists(ws_settings_path):
-        try:
-            with open(ws_settings_path, 'r', encoding='utf-8') as f:
-                ws_settings = json.load(f)
-        except Exception:
-            pass
-    ws_settings["java.configuration.updateBuildConfiguration"] = "automatic"
-    with open(ws_settings_path, 'w', encoding='utf-8') as f:
-        json.dump(ws_settings, f, indent=4)
-    print("Successfully configured VS Code settings.")
-
-
-def create_gitignore_file(temp_proj_path):
-    """Write standard Java/Maven .gitignore file in the project."""
-    gitignore_path = os.path.join(temp_proj_path, ".gitignore")
-    gitignore_content = """# Maven build output
+GITIGNORE = """# Maven build output
 target/
 
 # IDE files
@@ -199,119 +75,336 @@ logs/
 Thumbs.db
 .DS_Store
 """
-    with open(gitignore_path, 'w', encoding='utf-8') as f:
-        f.write(gitignore_content)
 
 
-def initialize_git_repository(project_path):
-    """Initialize a Git repository and commit the initial files at the destination."""
+class ProjectCreationError(RuntimeError):
+    """Raised when a project cannot be created safely."""
+
+
+def default_workspace_root() -> Path:
+    """Return the default directory for generated projects."""
+    return Path(__file__).resolve().parents[2]
+
+
+def validate_artifact_id(value: str) -> str:
+    """Validate an artifact ID that is safe as one path component."""
+    if not ARTIFACT_ID_PATTERN.fullmatch(value):
+        raise argparse.ArgumentTypeError(
+            "artifactId must contain only letters, digits, dots, underscores, and "
+            "hyphens, and must start with a letter or digit"
+        )
+    return value
+
+
+def validate_group_id(value: str) -> str:
+    """Validate a group ID that can also be used as a Java package."""
+    if not GROUP_ID_PATTERN.fullmatch(value):
+        raise argparse.ArgumentTypeError(
+            "groupId must be dot-separated Java identifiers (for example com.example)"
+        )
+    return value
+
+
+def parse_git_choice(value: str) -> bool:
+    """Parse a yes/no command-line value."""
+    normalized = value.strip().lower()
+    if normalized in {"y", "yes", "true"}:
+        return True
+    if normalized in {"n", "no", "false"}:
+        return False
+    raise argparse.ArgumentTypeError("Git choice must be y/yes/true or n/no/false")
+
+
+def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse arguments, prompting for omitted project details."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("artifact_id", nargs="?", help="Maven artifactId/project name")
+    parser.add_argument("group_id", nargs="?", help="Maven groupId")
+    parser.add_argument("initialize_git", nargs="?", help="Initialize Git: y or n")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="replace an existing project directory with the same name",
+    )
+    parser.add_argument(
+        "--workspace-root",
+        type=Path,
+        default=default_workspace_root(),
+        help=argparse.SUPPRESS,
+    )
+    args = parser.parse_args(argv)
+
+    if args.artifact_id is None:
+        args.artifact_id = input("Enter project name (artifactId): ").strip()
+    try:
+        args.artifact_id = validate_artifact_id(args.artifact_id)
+    except argparse.ArgumentTypeError as error:
+        parser.error(str(error))
+
+    default_group = f"com.{args.artifact_id.replace('-', '.')}"
+    if args.group_id is None:
+        args.group_id = input(f"Enter Group ID [{default_group}]: ").strip()
+        args.group_id = args.group_id or default_group
+    try:
+        args.group_id = validate_group_id(args.group_id)
+    except argparse.ArgumentTypeError as error:
+        parser.error(str(error))
+
+    if args.initialize_git is None:
+        git_input = input("Initialize Git repository? (y/n) [y]: ").strip() or "y"
+    else:
+        git_input = args.initialize_git
+    try:
+        args.initialize_git = parse_git_choice(git_input)
+    except argparse.ArgumentTypeError as error:
+        parser.error(str(error))
+
+    args.workspace_root = args.workspace_root.expanduser().resolve()
+    return args
+
+
+def qualified(name: str) -> str:
+    """Return a Maven-namespace-qualified XML element name."""
+    return f"{{{MAVEN_NAMESPACE}}}{name}"
+
+
+def get_or_insert_section(
+    root: ET.Element, name: str, before: tuple[str, ...]
+) -> ET.Element:
+    """Find a POM section or insert it before later schema sections."""
+    existing = root.find(qualified(name))
+    if existing is not None:
+        return existing
+
+    section = ET.Element(qualified(name))
+    before_tags = {qualified(item) for item in before}
+    for index, child in enumerate(root):
+        if child.tag in before_tags:
+            root.insert(index, section)
+            break
+    else:
+        root.append(section)
+    return section
+
+
+def set_child_text(parent: ET.Element, name: str, value: str) -> None:
+    """Set a child element, creating it when necessary."""
+    child = parent.find(qualified(name))
+    if child is None:
+        child = ET.SubElement(parent, qualified(name))
+    child.text = value
+
+
+def upsert_dependency(
+    dependencies: ET.Element,
+    group_id: str,
+    artifact_id: str,
+    version: str,
+    scope: str | None,
+) -> None:
+    """Add or update one dependency without discarding unrelated dependencies."""
+    dependency = None
+    for candidate in dependencies.findall(qualified("dependency")):
+        if (
+            candidate.findtext(qualified("groupId")) == group_id
+            and candidate.findtext(qualified("artifactId")) == artifact_id
+        ):
+            dependency = candidate
+            break
+
+    if dependency is None:
+        dependency = ET.SubElement(dependencies, qualified("dependency"))
+    set_child_text(dependency, "groupId", group_id)
+    set_child_text(dependency, "artifactId", artifact_id)
+    set_child_text(dependency, "version", version)
+
+    scope_element = dependency.find(qualified("scope"))
+    if scope is None and scope_element is not None:
+        dependency.remove(scope_element)
+    elif scope is not None:
+        set_child_text(dependency, "scope", scope)
+
+
+def adjust_pom_to_java21(pom_path: Path) -> None:
+    """Configure Java 21 and required dependencies using structured XML editing."""
+    print("\nConfiguring pom.xml for Java 21 and required dependencies...")
+    try:
+        parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+        tree = ET.parse(pom_path, parser=parser)
+    except ET.ParseError as error:
+        raise ProjectCreationError(f"Invalid generated pom.xml: {error}") from error
+
+    root = tree.getroot()
+    if root.tag != qualified("project"):
+        raise ProjectCreationError(
+            "Generated pom.xml does not use the Maven POM namespace"
+        )
+
+    properties = get_or_insert_section(
+        root,
+        "properties",
+        ("dependencyManagement", "dependencies", "build", "profiles"),
+    )
+    set_child_text(properties, "maven.compiler.source", JAVA_VERSION)
+    set_child_text(properties, "maven.compiler.target", JAVA_VERSION)
+    set_child_text(properties, "project.build.sourceEncoding", "UTF-8")
+
+    dependencies = get_or_insert_section(root, "dependencies", ("build", "profiles"))
+    for dependency in DEPENDENCIES:
+        upsert_dependency(dependencies, *dependency)
+
+
+    ET.register_namespace("", MAVEN_NAMESPACE)
+    ET.indent(tree, space="  ")
+    tree.write(pom_path, encoding="utf-8", xml_declaration=True)
+    print("Successfully updated pom.xml.")
+
+
+def setup_project_files(project_path: Path) -> None:
+    """Create resources, logging, editor settings, and ignore rules."""
+    print("\nCreating resource directories and project configuration...")
+    main_resources = project_path / "src" / "main" / "resources"
+    test_resources = project_path / "src" / "test" / "resources"
+    main_resources.mkdir(parents=True, exist_ok=True)
+    test_resources.mkdir(parents=True, exist_ok=True)
+    (main_resources / "log4j2.xml").write_text(LOG4J_CONFIGURATION, encoding="utf-8")
+
+    vscode_directory = project_path / ".vscode"
+    vscode_directory.mkdir(exist_ok=True)
+    settings = {"java.configuration.updateBuildConfiguration": "automatic"}
+    (vscode_directory / "settings.json").write_text(
+        json.dumps(settings, indent=2) + "\n", encoding="utf-8"
+    )
+    (project_path / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
+
+
+def require_executable(name: str) -> str:
+    """Resolve a required command or provide a useful error."""
+    executable = shutil.which(name)
+    if executable is None:
+        raise ProjectCreationError(f"Required command not found on PATH: {name}")
+    return executable
+
+
+def run_checked(
+    command: list[str], cwd: Path, **kwargs: object
+) -> subprocess.CompletedProcess:
+    """Run a command and convert failures into user-facing errors."""
+    try:
+        return subprocess.run(command, cwd=cwd, check=True, **kwargs)
+    except subprocess.CalledProcessError as error:
+        raise ProjectCreationError(
+            f"Command failed with exit code {error.returncode}: {' '.join(command)}"
+        ) from error
+    except OSError as error:
+        raise ProjectCreationError(f"Could not run {command[0]}: {error}") from error
+
+
+def initialize_git_repository(project_path: Path) -> None:
+    """Initialize Git, stage the project, and attempt the initial commit."""
     print("\nInitializing Git repository...")
+    git = require_executable("git")
+    run_checked([git, "init"], project_path, stdout=subprocess.DEVNULL)
+    run_checked([git, "add", "."], project_path)
+
+    commit = subprocess.run(
+        [git, "commit", "-m", "Initial commit"],
+        cwd=project_path,
+        capture_output=True,
+        text=True,
+    )
+    if commit.returncode == 0:
+        print("Successfully made the initial commit.")
+    else:
+        reason = commit.stderr.strip() or commit.stdout.strip() or "unknown Git error"
+        print(f"Warning: Git was initialized, but the initial commit failed: {reason}")
+
+
+def safe_rmtree(path: Path) -> None:
+    """Delete a known directory tree, handling read-only files on Windows."""
+    if not path.exists():
+        return
+
+    def remove_readonly(function, item, _error_info):
+        os.chmod(item, stat.S_IWRITE)
+        function(item)
+
+    shutil.rmtree(path, onerror=remove_readonly)
+
+
+def create_project(args: argparse.Namespace) -> Path:
+    """Generate, configure, move, optionally version, and verify one project."""
+    workspace_root = args.workspace_root
+    if not workspace_root.is_dir():
+        raise ProjectCreationError(f"Workspace root does not exist: {workspace_root}")
+
+    destination = (workspace_root / args.artifact_id).resolve()
+    if destination.parent != workspace_root:
+        raise ProjectCreationError(
+            "Project destination must be inside the workspace root"
+        )
+    if destination.exists() and not args.force:
+        raise ProjectCreationError(
+            f"Destination already exists: {destination}. Use --force to replace it."
+        )
+
+    maven = require_executable("mvn")
+    print(
+        f"\nCreating '{args.artifact_id}' with Group ID '{args.group_id}' "
+        "in an isolated temporary directory..."
+    )
+    temp_directory = Path(tempfile.mkdtemp(prefix="java_gen_"))
     try:
-        # Initialize Git and add files
-        subprocess.run(["git", "init"], cwd=project_path, check=True, stdout=subprocess.DEVNULL)
-        subprocess.run(["git", "add", "."], cwd=project_path, check=True)
-        
-        # Try to commit (might skip if git user name/email are not configured)
-        result = subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=project_path, capture_output=True, text=True)
-        if result.returncode == 0:
-            print("Successfully initialized Git and made the initial commit.")
-        else:
-            print("Successfully initialized Git (initial commit skipped due to missing user.name/email in git config).")
-    except Exception as e:
-        print(f"Warning: Could not initialize Git repository: {e}")
-
-
-def safe_rmtree(path):
-    """Deletes a directory tree safely, resolving Windows read-only file permission errors."""
-    import stat
-    if os.path.exists(path):
-        def remove_readonly(func, p, excinfo):
-            os.chmod(p, stat.S_IWRITE)
-            func(p)
-        shutil.rmtree(path, onerror=remove_readonly)
-
-
-def verify_build(project_path):
-    """Run Maven compilation and test suite to verify the project builds successfully."""
-    print("\nVerifying the build...")
-    try:
-        # Run clean test in the new project directory
-        subprocess.run(["mvn", "clean", "test"], cwd=project_path, check=True, shell=True)
-        print("\n=== Success! Project is generated and verified with Java 21! ===")
-        print(f"Project location: {os.path.abspath(project_path)}")
-    except subprocess.CalledProcessError:
-        print("\nWarning: Build verification failed. Please check the project manually.")
-
-
-def main():
-    print("=== Java 21 Maven Project Creator ===")
-    
-    artifact_id, group_id, initialize_git = get_project_inputs()
-    print(f"\nCreating project '{artifact_id}' with Group ID '{group_id}'...")
-    
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    workspace_root = os.path.abspath(os.path.join(script_dir, "..", ".."))
-    destination = os.path.join(workspace_root, artifact_id)
-    
-    print("\nGenerating project in temporary directory to prevent IDE race conditions...")
-    
-    try:
-        temp_dir = tempfile.mkdtemp(prefix="java_gen_")
-    except Exception as e:
-        print(f"Error creating temp directory: {e}")
-        sys.exit(1)
-
-    try:
-        # Run Maven archetype generate in temp directory
-        cmd = [
-            "mvn", "archetype:generate",
+        command = [
+            maven,
+            "archetype:generate",
             "-B",
             "-DarchetypeGroupId=org.apache.maven.archetypes",
             "-DarchetypeArtifactId=maven-archetype-quickstart",
-            "-DarchetypeVersion=1.4",
-            f"-DgroupId={group_id}",
-            f"-DartifactId={artifact_id}",
-            "-Darchetype.interactive=false"
+            f"-DarchetypeVersion={ARCHETYPE_VERSION}",
+            f"-DgroupId={args.group_id}",
+            f"-DartifactId={args.artifact_id}",
+            "-Darchetype.interactive=false",
         ]
-        subprocess.run(cmd, cwd=temp_dir, check=True, shell=True)
+        run_checked(command, temp_directory)
 
-        temp_proj_path = os.path.join(temp_dir, artifact_id)
-        pom_path = os.path.join(temp_proj_path, "pom.xml")
-        if not os.path.exists(pom_path):
-            raise FileNotFoundError(f"Could not find pom.xml at {pom_path}")
+        generated_project = temp_directory / args.artifact_id
+        pom_path = generated_project / "pom.xml"
+        if not pom_path.is_file():
+            raise ProjectCreationError(
+                f"Maven did not generate the expected file: {pom_path}"
+            )
 
         adjust_pom_to_java21(pom_path)
-        setup_resource_directories(temp_proj_path)
+        setup_project_files(generated_project)
 
-        try:
-            configure_vscode_settings(temp_proj_path)
-        except Exception as e:
-            print(f"Warning: Could not write VS Code settings: {e}")
-
-        if initialize_git:
-            try:
-                create_gitignore_file(temp_proj_path)
-            except Exception as e:
-                print(f"Warning: Could not create .gitignore file: {e}")
-
-        print("\nMoving finalized project to workspace root...")
-        safe_rmtree(destination)
-        shutil.move(temp_proj_path, destination)
-        print(f"Project moved successfully to {destination}")
-
-        if initialize_git:
-            try:
-                initialize_git_repository(destination)
-            except Exception as e:
-                print(f"Warning: Git initialization failed: {e}")
-
-    except Exception as e:
-        print(f"\nError: Project generation failed. {e}")
-        sys.exit(1)
+        if destination.exists():
+            safe_rmtree(destination)
+        shutil.move(str(generated_project), str(destination))
     finally:
-        safe_rmtree(temp_dir)
+        safe_rmtree(temp_directory)
 
-    verify_build(destination)
+    if args.initialize_git:
+        initialize_git_repository(destination)
+
+    print("\nVerifying the generated project with mvn clean test...")
+    run_checked([maven, "clean", "test"], destination)
+    print("\n=== Success! Project generated and verified with Java 21. ===")
+    print(f"Project location: {destination}")
+    return destination
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Command-line entry point."""
+    print("=== Java 21 Maven Project Creator ===")
+    args = parse_arguments(argv)
+    try:
+        create_project(args)
+    except (ProjectCreationError, OSError) as error:
+        print(f"\nError: {error}", file=sys.stderr)
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
